@@ -1,0 +1,699 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>
+            Time Expressions Runner — DOM-linked Renderer + Countdown + Signal
+            (s)
+        </title>
+        <style>
+            :root {
+                --bg: #0b1020;
+                --panel: #131a2b;
+                --muted: #9fb0ff;
+                --text: #e7ecff;
+                --border: #1f2942;
+                --chip-bg: #0b1020;
+                --chip-border: #223055;
+                --chip-hi: #23315c;
+                --chip-hi-border: #6b8cff;
+            }
+            * {
+                box-sizing: border-box;
+            }
+            body {
+                margin: 0;
+                font-family:
+                    system-ui,
+                    -apple-system,
+                    Segoe UI,
+                    Roboto,
+                    Ubuntu,
+                    Cantarell,
+                    "Helvetica Neue",
+                    Arial;
+                background: var(--bg);
+                color: var(--text);
+            }
+            header {
+                padding: 16px 20px;
+                border-bottom: 1px solid var(--border);
+                background: #0d142a;
+            }
+            header h1 {
+                margin: 0;
+                font-size: 18px;
+            }
+            header p {
+                margin: 6px 0 0;
+                color: var(--muted);
+                font-size: 13px;
+            }
+            main {
+                padding: 18px 20px;
+                display: grid;
+                grid-template-columns: 420px 1fr;
+                gap: 16px;
+            }
+            .card {
+                background: var(--panel);
+                border: 1px solid var(--border);
+                border-radius: 12px;
+                padding: 14px;
+                box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+            }
+            .row {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+                flex-wrap: wrap;
+            }
+            input[type="text"] {
+                flex: 1;
+                padding: 10px 12px;
+                border-radius: 10px;
+                border: 1px solid #223055;
+                background: #0b1020;
+                color: var(--text);
+                font-family:
+                    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                    "Liberation Mono", "Courier New", monospace;
+            }
+            button {
+                background: #1a2652;
+                color: #dbe3ff;
+                border: 1px solid #26356a;
+                border-radius: 10px;
+                padding: 8px 12px;
+                cursor: pointer;
+                font-weight: 600;
+            }
+            button:hover {
+                filter: brightness(1.08);
+            }
+            button.danger {
+                background: #5b2030;
+                border-color: #7a2c40;
+            }
+            #error {
+                color: #ff9aa2;
+                min-height: 1.2em;
+                font-size: 13px;
+            }
+
+            /* Renderer */
+            #expr-render {
+                padding: 12px;
+                border: 1px solid #223055;
+                background: #0b1020;
+                border-radius: 10px;
+                min-height: 48px;
+                font-family:
+                    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                    "Liberation Mono", "Courier New", monospace;
+                color: #cfe2ff;
+                display: flex;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 6px;
+                line-height: 1.6;
+            }
+            #expr-render .num,
+            #expr-render .sig {
+                display: inline-block;
+                padding: 2px 6px;
+                border: 1px solid var(--chip-border);
+                border-radius: 6px;
+                background: var(--chip-bg);
+                color: #e7ecff;
+            }
+            #expr-render .txt {
+                white-space: pre;
+            }
+            #expr-render .flash {
+                animation: numflash 50ms ease-out;
+            }
+            @keyframes numflash {
+                0% {
+                    background: var(--chip-hi);
+                    border-color: var(--chip-hi-border);
+                    box-shadow: 0 0 0 3px rgba(122, 162, 255, 0.25) inset;
+                }
+                100% {
+                    background: var(--chip-bg);
+                    border-color: var(--chip-border);
+                    box-shadow: none;
+                }
+            }
+
+            /* Countdown row */
+            #expr-timer {
+                margin-top: 10px;
+                font-size: 14px;
+                color: #b5c4ff;
+            }
+        </style>
+    </head>
+    <body>
+        <header>
+            <h1>
+                Time Expressions Runner — DOM-linked Renderer + Countdown +
+                Signal (s)
+            </h1>
+            <p>
+                Syntax adds <code>s</code> as a user signal. Example:
+                <code>4(3+1+s)</code> — it pauses on <code>s</code> until you
+                press the <em>Proceed (s)</em> button.
+            </p>
+        </header>
+
+        <main>
+            <section class="card">
+                <div class="row" style="margin-bottom: 8px">
+                    <input type="text" id="expr" value="4(3+1+s)+15" />
+                </div>
+                <div class="row" style="gap: 10px">
+                    <button id="parse">Parse</button>
+                    <button id="run">Run</button>
+                    <button id="stop" class="danger">Stop</button>
+                    <button
+                        id="sigProceed"
+                        title="Continue when expression is waiting at s"
+                    >
+                        Proceed (s)
+                    </button>
+                    <span style="font-size: 13px; color: #8ea1d1"
+                        >Running waits show decimals; repeats show remaining
+                        iterations; <code>s</code> waits for your click.</span
+                    >
+                </div>
+                <div id="error"></div>
+            </section>
+
+            <section class="card">
+                <div
+                    id="expr-render"
+                    aria-live="polite"
+                    aria-label="Expression view"
+                ></div>
+                <div id="expr-timer">Remaining: --s</div>
+            </section>
+        </main>
+
+        <script>
+            // ===================== AST MODEL =====================
+            const Status = {
+                Pending: "pending",
+                Running: "running",
+                Done: "done",
+            };
+            const TT = { EOF: 0, NUM: 1, PLUS: 2, LP: 3, RP: 4, SIG: 5 }; // SIG == 's'
+
+            // ===================== SIGNAL MANAGER =====================
+            class SignalManager {
+                constructor(button) {
+                    this.button = button;
+                    this.queue = [];
+                    this._bind();
+                }
+                _bind() {
+                    if (this.button)
+                        this.button.addEventListener("click", () =>
+                            this.trigger(),
+                        );
+                }
+                wait() {
+                    return new Promise((res) => this.queue.push(res));
+                }
+                trigger() {
+                    const r = this.queue.shift();
+                    if (r) r();
+                }
+            }
+
+            // ===================== LEXER & PARSER (supports 's') =====================
+            class Lexer {
+                constructor(s) {
+                    this.s = s;
+                    this.i = 0;
+                }
+                peek() {
+                    return this.i < this.s.length ? this.s[this.i] : "\0";
+                }
+                next() {
+                    return this.i < this.s.length ? this.s[this.i++] : "\0";
+                }
+                skipWS() {
+                    while (/\s/.test(this.peek())) this.next();
+                }
+                number(first) {
+                    let out = first;
+                    while (/\d/.test(this.peek())) out += this.next();
+                    return out;
+                }
+                nextToken() {
+                    this.skipWS();
+                    const c = this.next();
+                    if (c === "\0") return { t: TT.EOF };
+                    if (c === "+") return { t: TT.PLUS, lit: "+" };
+                    if (c === "(") return { t: TT.LP, lit: "(" };
+                    if (c === ")") return { t: TT.RP, lit: ")" };
+                    if (c === "s" || c === "S") return { t: TT.SIG, lit: "s" };
+                    if (/\d/.test(c)) return { t: TT.NUM, lit: this.number(c) };
+                    throw new Error(`Unexpected char ${JSON.stringify(c)}`);
+                }
+            }
+            class Parser {
+                constructor(input) {
+                    this.l = new Lexer(input);
+                    this.cur = this.l.nextToken();
+                    this.peek = this.l.nextToken();
+                }
+                adv() {
+                    this.cur = this.peek;
+                    this.peek = this.l.nextToken();
+                }
+                expect(t) {
+                    if (this.cur.t !== t)
+                        throw new Error(
+                            `Expected ${t}, got ${this.cur.t} (${this.cur.lit ?? ""})`,
+                        );
+                }
+                parse() {
+                    const n = this.expr();
+                    if (this.cur.t !== TT.EOF)
+                        throw new Error(
+                            `Trailing input at ${this.cur.lit ?? ""}`,
+                        );
+                    return n;
+                }
+                expr() {
+                    const parts = [this.term()];
+                    while (this.cur.t === TT.PLUS) {
+                        this.adv();
+                        parts.push(this.term());
+                    }
+                    return parts.length === 1
+                        ? parts[0]
+                        : {
+                              type: "sequence",
+                              status: Status.Pending,
+                              currentIndex: 0,
+                              children: parts,
+                          };
+                }
+                term() {
+                    if (this.cur.t === TT.NUM) {
+                        const n = parseInt(this.cur.lit, 10);
+                        this.adv();
+                        if (this.cur.t === TT.LP) {
+                            this.adv();
+                            const body = this.expr();
+                            this.expect(TT.RP);
+                            this.adv();
+                            return {
+                                type: "repeat",
+                                status: Status.Pending,
+                                times: n,
+                                iteration: 0,
+                                body,
+                            };
+                        }
+                        return {
+                            type: "wait",
+                            status: Status.Pending,
+                            seconds: n,
+                            elapsed: 0,
+                        };
+                    }
+                    if (this.cur.t === TT.SIG) {
+                        this.adv();
+                        return { type: "signal", status: Status.Pending };
+                    }
+                    throw new Error(
+                        `Unexpected token ${this.cur.t} (${this.cur.lit ?? ""})`,
+                    );
+                }
+            }
+
+            // ===================== EVALUATOR (supports 'signal' waits) =====================
+            class Evaluator {
+                constructor(ast, signalMgr) {
+                    this.ast = ast;
+                    this.signalMgr = signalMgr;
+                }
+                reset(node = this.ast) {
+                    if (!node) return;
+                    if (node.type === "wait") {
+                        node.status = Status.Pending;
+                        node.elapsed = 0;
+                    } else if (node.type === "sequence") {
+                        node.status = Status.Pending;
+                        node.currentIndex = 0;
+                        node.children.forEach((ch) => this.reset(ch));
+                    } else if (node.type === "repeat") {
+                        node.status = Status.Pending;
+                        node.iteration = 0;
+                        this.reset(node.body);
+                    } else if (node.type === "signal") {
+                        node.status = Status.Pending;
+                    }
+                }
+                async run(signal, onUpdate) {
+                    const exec = async (node) => {
+                        if (signal?.aborted) throw new Error("aborted");
+                        if (node.type === "wait") {
+                            node.status = Status.Running;
+                            onUpdate(node);
+                            while (node.elapsed < node.seconds) {
+                                await sleep(1000, signal);
+                                node.elapsed++;
+                                onUpdate(node);
+                                if (signal?.aborted) throw new Error("aborted");
+                            }
+                            node.status = Status.Done;
+                            onUpdate(node);
+                        } else if (node.type === "signal") {
+                            node.status = Status.Running;
+                            onUpdate(node);
+                            await this.signalMgr.wait(); // waits until user clicks Proceed (s)
+                            if (signal?.aborted) throw new Error("aborted");
+                            node.status = Status.Done;
+                            onUpdate(node);
+                        } else if (node.type === "sequence") {
+                            node.status = Status.Running;
+                            onUpdate(node);
+                            for (
+                                let i = node.currentIndex;
+                                i < node.children.length;
+                                i++
+                            ) {
+                                node.currentIndex = i;
+                                onUpdate(node);
+                                await exec(node.children[i]);
+                                if (signal?.aborted) throw new Error("aborted");
+                            }
+                            node.status = Status.Done;
+                            onUpdate(node);
+                        } else if (node.type === "repeat") {
+                            node.status = Status.Running;
+                            onUpdate(node);
+                            for (let i = node.iteration; i < node.times; i++) {
+                                node.iteration = i;
+                                onUpdate(node);
+                                this.reset(node.body);
+                                await exec(node.body);
+                                if (signal?.aborted) throw new Error("aborted");
+                            }
+                            node.status = Status.Done;
+                            onUpdate(node);
+                        }
+                    };
+                    await exec(this.ast);
+                }
+            }
+            function sleep(ms, signal) {
+                return new Promise((res, rej) => {
+                    if (signal?.aborted) return rej(new Error("aborted"));
+                    const id = setTimeout(() => {
+                        cleanup();
+                        res();
+                    }, ms);
+                    const onAbort = () => {
+                        cleanup();
+                        rej(new Error("aborted"));
+                    };
+                    const cleanup = () => {
+                        clearTimeout(id);
+                        signal?.removeEventListener("abort", onAbort);
+                    };
+                    signal?.addEventListener("abort", onAbort, { once: true });
+                });
+            }
+
+            // ===================== RENDERER (DOM-linked updates with high-res wait countdown + signal chip) =====================
+            class RendererDomLinked {
+                constructor(rootEl) {
+                    this.root = rootEl;
+                    this.ast = null;
+                    this._allWaits = [];
+                    this._raf = null;
+                }
+                build(ast) {
+                    this.ast = ast;
+                    this._allWaits = [];
+                    this.root.replaceChildren();
+                    this._buildNode(ast, null, this.root);
+                    this._startTicker();
+                }
+                update(changed) {
+                    if (!changed) return;
+                    if (changed.type === "wait") {
+                        changed._lastUpdate = performance.now();
+                        changed._lastElapsed = changed.elapsed;
+                    }
+                    this._syncSubtree(changed);
+                    if (changed.type === "wait" && changed._elNum) {
+                        this._flash(changed._elNum);
+                        this._bubbleParents(changed);
+                    } else if (changed.type === "repeat" && changed._elTimes) {
+                        this._flash(changed._elTimes);
+                    } else if (changed.type === "signal" && changed._elSig) {
+                        this._flash(changed._elSig);
+                    }
+                    this._startTicker();
+                }
+                _buildNode(n, parent, parentEl) {
+                    n._parent = parent;
+                    if (n.type === "wait") {
+                        const num = document.createElement("div");
+                        num.className = "num";
+                        n._lastUpdate = performance.now();
+                        n._lastElapsed = n.elapsed;
+                        num.textContent = this._formatRemainingWait(n);
+                        n._elNum = num;
+                        this._allWaits.push(n);
+                        parentEl.appendChild(num);
+                    } else if (n.type === "signal") {
+                        const sig = document.createElement("div");
+                        sig.className = "sig";
+                        sig.textContent = "s";
+                        n._elSig = sig;
+                        parentEl.appendChild(sig);
+                    } else if (n.type === "sequence") {
+                        n._elContainer = document.createElement("span");
+                        n._elContainer.className = "seq";
+                        parentEl.appendChild(n._elContainer);
+                        n.children.forEach((ch, i) => {
+                            this._buildNode(ch, n, n._elContainer);
+                            if (i < n.children.length - 1) {
+                                const txt = document.createElement("span");
+                                txt.className = "txt";
+                                txt.textContent = " + ";
+                                n._elContainer.appendChild(txt);
+                            }
+                        });
+                    } else if (n.type === "repeat") {
+                        const times = document.createElement("div");
+                        times.className = "num";
+                        times.textContent = String(this._repeatRemaining(n));
+                        n._elTimes = times;
+                        parentEl.appendChild(times);
+                        const l = document.createElement("span");
+                        l.className = "txt";
+                        l.textContent = "(";
+                        const r = document.createElement("span");
+                        r.className = "txt";
+                        r.textContent = ")";
+                        parentEl.appendChild(l);
+                        this._buildNode(n.body, n, parentEl);
+                        parentEl.appendChild(r);
+                    }
+                }
+                _syncSubtree(n) {
+                    if (!n) return;
+                    if (n.type === "wait") {
+                        if (n._elNum)
+                            n._elNum.textContent = this._formatRemainingWait(n);
+                    } else if (n.type === "signal") {
+                        if (n._elSig) n._elSig.textContent = "s";
+                    } else if (n.type === "repeat") {
+                        if (n._elTimes)
+                            n._elTimes.textContent = String(
+                                this._repeatRemaining(n),
+                            );
+                        this._syncSubtree(n.body);
+                    } else if (n.type === "sequence") {
+                        for (const ch of n.children) this._syncSubtree(ch);
+                    }
+                }
+                _startTicker() {
+                    if (this._raf) return;
+                    const step = () => {
+                        let any = false;
+                        for (const w of this._allWaits) {
+                            if (w.status === Status.Running && w._elNum) {
+                                any = true;
+                                w._elNum.textContent =
+                                    this._formatRemainingWait(w);
+                            }
+                        }
+                        if (any) this._raf = requestAnimationFrame(step);
+                        else this._raf = null;
+                    };
+                    this._raf = requestAnimationFrame(step);
+                }
+                _waitRemaining(n) {
+                    let remaining = n.seconds - n.elapsed;
+                    if (n.status === Status.Done) remaining = 0;
+                    return remaining < 0 ? 0 : remaining;
+                }
+                _repeatRemaining(n) {
+                    let remaining = n.times - n.iteration;
+                    if (n.status === Status.Done) remaining = 0;
+                    return remaining < 0 ? 0 : remaining;
+                }
+                _formatRemainingWait(n) {
+                    if (n.status === Status.Running) {
+                        const baseElapsed = n._lastElapsed ?? n.elapsed;
+                        const last = n._lastUpdate ?? performance.now();
+                        const dt = Math.max(
+                            0,
+                            (performance.now() - last) / 1000,
+                        );
+                        const rem = Math.max(0, n.seconds - (baseElapsed + dt));
+                        return rem.toFixed(1);
+                    }
+                    return String(this._waitRemaining(n));
+                }
+                _flash(el) {
+                    if (!el) return;
+                    el.classList.remove("flash");
+                    void el.offsetWidth;
+                    el.classList.add("flash");
+                }
+                _bubbleParents(n) {
+                    let p = n._parent;
+                    while (p) {
+                        if (p.type === "repeat" && p._elTimes) {
+                            p._elTimes.textContent = String(
+                                this._repeatRemaining(p),
+                            );
+                        }
+                        p = p._parent;
+                    }
+                }
+            }
+
+            // ======= Remaining duration utilities (s contributes 0 seconds) =======
+            function staticDuration(node) {
+                if (node.type === "wait") return node.seconds;
+                if (node.type === "signal") return 0;
+                if (node.type === "sequence")
+                    return node.children.reduce(
+                        (acc, ch) => acc + staticDuration(ch),
+                        0,
+                    );
+                if (node.type === "repeat")
+                    return node.times * staticDuration(node.body);
+                return 0;
+            }
+            function remainingDuration(node) {
+                if (node.type === "wait") {
+                    let rem = node.seconds - node.elapsed;
+                    if (node.status === Status.Done) rem = 0;
+                    return rem < 0 ? 0 : rem;
+                }
+                if (node.type === "signal") {
+                    return 0;
+                }
+                if (node.type === "sequence") {
+                    if (node.status === Status.Done) return 0;
+                    let total = 0;
+                    for (let i = 0; i < node.children.length; i++) {
+                        const ch = node.children[i];
+                        if (i < node.currentIndex) continue;
+                        if (i === node.currentIndex)
+                            total += remainingDuration(ch);
+                        else total += staticDuration(ch);
+                    }
+                    return total;
+                }
+                if (node.type === "repeat") {
+                    if (node.status === Status.Done) return 0;
+                    const bodyDur = staticDuration(node.body);
+                    const bodyRem = remainingDuration(node.body);
+                    const remainingIters = Math.max(
+                        node.times - node.iteration - 1,
+                        0,
+                    );
+                    return bodyRem + remainingIters * bodyDur;
+                }
+                return 0;
+            }
+            function updateTimer() {
+                const el = document.getElementById("expr-timer");
+                if (!el || !ast) return;
+                const secs = remainingDuration(ast);
+                el.textContent = "Remaining: " + secs + "s";
+            }
+
+            // ===================== Wire up controls =====================
+            const exprEl = document.getElementById("expr");
+            const btnParse = document.getElementById("parse");
+            const btnRun = document.getElementById("run");
+            const btnStop = document.getElementById("stop");
+            const btnProceed = document.getElementById("sigProceed");
+            const renderRoot = document.getElementById("expr-render");
+
+            let abortCtrl = null;
+            let ast = null;
+            const signalMgr = new SignalManager(btnProceed);
+            const renderer = new RendererDomLinked(renderRoot);
+
+            function parseNow() {
+                try {
+                    const p = new Parser(exprEl.value.trim());
+                    ast = p.parse();
+                    setError("");
+                    renderer.build(ast);
+                    updateTimer();
+                } catch (e) {
+                    setError("Parse error: " + e.message);
+                }
+            }
+            async function runNow() {
+                if (!ast) parseNow();
+                if (!ast) return;
+                stopNow();
+                abortCtrl = new AbortController();
+                const ev = new Evaluator(ast, signalMgr);
+                const onUpdate = (changed) => {
+                    renderer.update(changed);
+                    updateTimer();
+                };
+                try {
+                    await ev.run(abortCtrl.signal, onUpdate);
+                } catch (e) {
+                    if (e.message !== "aborted")
+                        setError("Error: " + e.message);
+                }
+            }
+            function stopNow() {
+                if (abortCtrl) {
+                    abortCtrl.abort();
+                    abortCtrl = null;
+                }
+            }
+            function setError(msg) {
+                document.getElementById("error").textContent = msg || "";
+            }
+
+            btnParse.onclick = parseNow;
+            btnRun.onclick = runNow;
+            btnStop.onclick = stopNow;
+            parseNow();
+        </script>
+    </body>
+</html>
