@@ -59,7 +59,16 @@ export class SignalManager {
 export class Beeper {
   ctx: AudioContext | null = null;
   muted = false;
+  // Routing AudioContext output through a MediaStream → <audio> element keeps
+  // the context alive on iOS even when the screen is locked. iOS suspends
+  // AudioContext in background but honours HTMLAudioElement playback.
+  private streamDest: MediaStreamAudioDestinationNode | null = null;
+  liveAudio: HTMLAudioElement | null = null;
   private silenceNode: AudioBufferSourceNode | null = null;
+
+  private get dest(): AudioNode {
+    return (this.streamDest ?? this.ctx?.destination) as AudioNode;
+  }
 
   unlock() {
     try {
@@ -73,8 +82,19 @@ export class Beeper {
     }
   }
 
-  // Run a looping silent buffer through the AudioContext so the browser keeps
-  // it active (and able to beep) even when the tab is in the background.
+  // Call once during a user gesture after unlock(). Routes all AudioContext
+  // audio through a MediaStream so iOS keeps it alive behind the lock screen.
+  startLiveOutput() {
+    if (!this.ctx || this.streamDest) return;
+    try {
+      this.streamDest = this.ctx.createMediaStreamDestination();
+      this.liveAudio = new Audio();
+      this.liveAudio.srcObject = this.streamDest.stream;
+    } catch (_) {
+      /* createMediaStreamDestination not supported — fall back to ctx.destination */
+    }
+  }
+
   startSilence() {
     if (!this.ctx || this.silenceNode) return;
     try {
@@ -82,7 +102,7 @@ export class Beeper {
       const src = this.ctx.createBufferSource();
       src.buffer = buf;
       src.loop = true;
-      src.connect(this.ctx.destination);
+      src.connect(this.dest);
       src.start();
       this.silenceNode = src;
     } catch (_) {
@@ -91,13 +111,10 @@ export class Beeper {
   }
 
   stopSilence() {
-    try {
-      this.silenceNode?.stop();
-    } catch (_) {
-      /* no-op */
-    }
+    try { this.silenceNode?.stop(); } catch (_) { /* no-op */ }
     this.silenceNode = null;
   }
+
   beep({
     freq = 880,
     duration = 0.09,
@@ -111,7 +128,6 @@ export class Beeper {
   } = {}) {
     if (this.muted || !this.ctx) return;
     const ctx = this.ctx;
-    // Browsers may re-suspend the context; resume best-effort before playing.
     if (ctx.state === "suspended") ctx.resume();
     const osc = ctx.createOscillator();
     const g = ctx.createGain();
@@ -120,7 +136,7 @@ export class Beeper {
     g.gain.setValueAtTime(0, ctx.currentTime);
     g.gain.linearRampToValueAtTime(gain, ctx.currentTime + 0.005);
     g.gain.exponentialRampToValueAtTime(1e-4, ctx.currentTime + duration);
-    osc.connect(g).connect(ctx.destination);
+    osc.connect(g).connect(this.dest);
     osc.start();
     osc.stop(ctx.currentTime + duration + 0.01);
   }

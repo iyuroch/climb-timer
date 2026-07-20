@@ -397,8 +397,9 @@ export class TerApp extends LitElement {
     } catch {
       /* ignore */
     }
-    // Also run silence through the AudioContext so the browser keeps it alive
-    // (and able to beep) when the tab is backgrounded.
+    // Play the AudioContext's live output stream. This keeps the AudioContext
+    // active on iOS lock screen because iOS honours <audio> element playback.
+    this.beeper.liveAudio?.play().catch(() => {});
     this.beeper.startSilence();
     this.setupMediaSession();
     this.updateMediaSession();
@@ -411,6 +412,7 @@ export class TerApp extends LitElement {
     } catch {
       /* ignore */
     }
+    this.beeper.liveAudio?.pause();
     this.beeper.stopSilence();
     this.clearMediaSession();
   }
@@ -592,6 +594,8 @@ export class TerApp extends LitElement {
 
   private unlockAudio() {
     this.beeper.unlock();
+    // Set up MediaStream routing so AudioContext stays alive behind the lock screen.
+    this.beeper.startLiveOutput();
   }
 
   private parse(expr: string) {
