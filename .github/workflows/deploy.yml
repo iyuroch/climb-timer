@@ -18,7 +18,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: denoland/setup-deno@v2
         with:
@@ -32,7 +32,7 @@ jobs:
         working-directory: climb-timer
         run: deno task build
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v4
         with:
           path: climb-timer/dist
 
