@@ -418,7 +418,7 @@ export class TerApp extends LitElement {
   private setupMediaSession() {
     const ms = (navigator as any).mediaSession;
     if (!ms) return;
-    const set = (action: string, fn: () => void) => {
+    const set = (action: string, fn: (() => void) | null) => {
       try {
         ms.setActionHandler(action, fn);
       } catch {
@@ -428,8 +428,15 @@ export class TerApp extends LitElement {
     set("play", () => this.resume());
     set("pause", () => this.pause());
     set("stop", () => this.stop());
-    // Lock-screen "next" advances past a Proceed (signal) step.
+    // Restart the current timer from the beginning.
+    set("previoustrack", () => {
+      if (this.runningId) this.run(this.runningId);
+    });
+    // Advance past a Proceed (signal) step.
     set("nexttrack", () => this.signal());
+    // Explicitly disable seek controls so iOS shows ⏮ play/pause ⏭ only.
+    set("seekbackward", null);
+    set("seekforward", null);
   }
 
   private updateMediaSession() {
@@ -445,10 +452,12 @@ export class TerApp extends LitElement {
         : `${remNum}s left`;
     try {
       if ((window as any).MediaMetadata) {
+        const iconUrl = new URL("icon.svg", location.href).href;
         ms.metadata = new (window as any).MediaMetadata({
           title: name,
           artist: status,
           album: "Climb Timer",
+          artwork: [{ src: iconUrl, type: "image/svg+xml" }],
         });
       }
       ms.playbackState = this.paused ? "paused" : "playing";
@@ -467,6 +476,9 @@ export class TerApp extends LitElement {
   private clearMediaSession() {
     const ms = (navigator as any).mediaSession;
     if (!ms) return;
+    for (const action of ["play","pause","stop","previoustrack","nexttrack","seekbackward","seekforward"]) {
+      try { ms.setActionHandler(action, null); } catch { /* unsupported */ }
+    }
     try {
       ms.playbackState = "none";
       ms.metadata = null;
