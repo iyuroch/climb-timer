@@ -339,8 +339,10 @@ export class TerApp extends LitElement {
 
   // Re-acquire the wake lock when returning to the tab (it auto-releases when hidden).
   private onVisibility = () => {
-    if (document.visibilityState === "visible" && this.runningId)
+    if (document.visibilityState === "visible" && this.runningId) {
       this.acquireWakeLock();
+      this.beeper.unlock();
+    }
   };
 
   connectedCallback() {
@@ -395,6 +397,9 @@ export class TerApp extends LitElement {
     } catch {
       /* ignore */
     }
+    // Also run silence through the AudioContext so the browser keeps it alive
+    // (and able to beep) when the tab is backgrounded.
+    this.beeper.startSilence();
     this.setupMediaSession();
     this.updateMediaSession();
   }
@@ -406,6 +411,7 @@ export class TerApp extends LitElement {
     } catch {
       /* ignore */
     }
+    this.beeper.stopSilence();
     this.clearMediaSession();
   }
 

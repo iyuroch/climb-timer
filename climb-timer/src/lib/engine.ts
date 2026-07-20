@@ -59,6 +59,8 @@ export class SignalManager {
 export class Beeper {
   ctx: AudioContext | null = null;
   muted = false;
+  private silenceNode: AudioBufferSourceNode | null = null;
+
   unlock() {
     try {
       if (!this.ctx)
@@ -69,6 +71,32 @@ export class Beeper {
     } catch (_) {
       /* no-op */
     }
+  }
+
+  // Run a looping silent buffer through the AudioContext so the browser keeps
+  // it active (and able to beep) even when the tab is in the background.
+  startSilence() {
+    if (!this.ctx || this.silenceNode) return;
+    try {
+      const buf = this.ctx.createBuffer(1, this.ctx.sampleRate, this.ctx.sampleRate);
+      const src = this.ctx.createBufferSource();
+      src.buffer = buf;
+      src.loop = true;
+      src.connect(this.ctx.destination);
+      src.start();
+      this.silenceNode = src;
+    } catch (_) {
+      /* no-op */
+    }
+  }
+
+  stopSilence() {
+    try {
+      this.silenceNode?.stop();
+    } catch (_) {
+      /* no-op */
+    }
+    this.silenceNode = null;
   }
   beep({
     freq = 880,
