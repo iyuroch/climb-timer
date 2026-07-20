@@ -417,28 +417,16 @@ export class TerApp extends LitElement {
     this.clearMediaSession();
   }
 
+  private setAction(action: string, fn: (() => void) | null) {
+    try {
+      (navigator as any).mediaSession?.setActionHandler(action, fn);
+    } catch { /* unsupported */ }
+  }
+
   private setupMediaSession() {
-    const ms = (navigator as any).mediaSession;
-    if (!ms) return;
-    const set = (action: string, fn: (() => void) | null) => {
-      try {
-        ms.setActionHandler(action, fn);
-      } catch {
-        /* unsupported action */
-      }
-    };
-    set("play", () => this.resume());
-    set("pause", () => this.pause());
-    set("stop", () => this.stop());
-    // Restart the current timer from the beginning.
-    set("previoustrack", () => {
-      if (this.runningId) this.run(this.runningId);
-    });
-    // Advance past a Proceed (signal) step.
-    set("nexttrack", () => this.signal());
-    // Explicitly disable seek controls so iOS shows ⏮ play/pause ⏭ only.
-    set("seekbackward", null);
-    set("seekforward", null);
+    // Clear everything — handlers are registered dynamically in updateMediaSession.
+    for (const a of ["play","pause","stop","previoustrack","nexttrack","seekbackward","seekforward"])
+      this.setAction(a, null);
   }
 
   private updateMediaSession() {
@@ -446,30 +434,22 @@ export class TerApp extends LitElement {
     if (!ms) return;
     const name =
       this.exprs.find((e) => e.id === this.runningId)?.name ?? "Climb Timer";
-    const remNum = typeof this.remaining === "number" ? this.remaining : 0;
-    const status = this.paused
-      ? "Paused"
-      : this.awaitingSignal
-        ? "Tap Proceed ▶"
-        : `${remNum}s left`;
+
+    // Only wire the Proceed button when the timer is actually waiting for a signal.
+    // All other actions are kept null so iOS shows no extra controls.
+    this.setAction("nexttrack", this.awaitingSignal ? () => this.signal() : null);
+
     try {
       if ((window as any).MediaMetadata) {
         const iconUrl = new URL("icon.svg", location.href).href;
         ms.metadata = new (window as any).MediaMetadata({
           title: name,
-          artist: status,
+          artist: this.awaitingSignal ? "Tap Proceed ▶" : "Running…",
           album: "Climb Timer",
           artwork: [{ src: iconUrl, type: "image/svg+xml" }],
         });
       }
-      ms.playbackState = this.paused ? "paused" : "playing";
-      if (this.totalDur > 0 && ms.setPositionState) {
-        ms.setPositionState({
-          duration: this.totalDur,
-          position: Math.min(this.totalDur, Math.max(0, this.totalDur - remNum)),
-          playbackRate: this.paused ? 0 : 1,
-        });
-      }
+      ms.playbackState = "playing";
     } catch {
       /* ignore */
     }
@@ -478,9 +458,8 @@ export class TerApp extends LitElement {
   private clearMediaSession() {
     const ms = (navigator as any).mediaSession;
     if (!ms) return;
-    for (const action of ["play","pause","stop","previoustrack","nexttrack","seekbackward","seekforward"]) {
-      try { ms.setActionHandler(action, null); } catch { /* unsupported */ }
-    }
+    for (const a of ["play","pause","stop","previoustrack","nexttrack","seekbackward","seekforward"])
+      this.setAction(a, null);
     try {
       ms.playbackState = "none";
       ms.metadata = null;
