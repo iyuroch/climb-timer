@@ -1,0 +1,13 @@
+{
+  "tasks": {
+    "dev": "deno run -A npm:vite@7 --host",
+    "build": "deno run -A npm:vite@7 build",
+    "preview": "deno run -A npm:vite@7 preview"
+  },
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+  },
+  "imports": {
+    "lit": "npm:lit@^3.3.1"
+  }
+}
