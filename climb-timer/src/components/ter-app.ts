@@ -617,6 +617,9 @@ export class TerApp extends LitElement {
     const found = this.exprs.find((e) => e.id === id);
     if (!found) return;
     this.stop();
+    // Fresh instance each run so stale wait() callbacks from a previous
+    // aborted run can never be resolved by the new run's trigger().
+    this.signalMgr = new SignalManager();
     this.unlockAudio();
     this.parse(found.expr);
     if (!this.ast) {
