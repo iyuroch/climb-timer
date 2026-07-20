@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect width="100" height="100" rx="22" fill="#0b1020"/>
+
+  <!-- spine: thick left-curving arc; endpoints at top/bottom of ellipse -->
+  <path d="M 54,13 A 22,37 0 1,0 54,87"
+        fill="none" stroke="#6b8cff" stroke-width="11" stroke-linecap="butt"/>
+
+  <!-- top bridge -->
+  <line x1="53" y1="13" x2="72" y2="13" stroke="#6b8cff" stroke-width="9" stroke-linecap="round"/>
+  <!-- bottom bridge / hinge -->
+  <line x1="53" y1="87" x2="72" y2="87" stroke="#6b8cff" stroke-width="9" stroke-linecap="round"/>
+
+  <!-- gate bar (thinner, lighter) -->
+  <line x1="72" y1="20" x2="72" y2="80" stroke="#9fb0ff" stroke-width="6" stroke-linecap="round"/>
+
+  <!-- nose: where gate locks into spine -->
+  <circle cx="72" cy="13" r="4.5" fill="#131a2b" stroke="#6b8cff" stroke-width="2.5"/>
+</svg>
