@@ -82,9 +82,11 @@ export class TerHeader extends LitElement {
               <h2>Grammar</h2>
               <div class="rows">
                 <code>10</code
-                ><span class="desc">wait 10 seconds (s is the default)</span>
-                <code>10s</code><span class="desc">wait 10 seconds</span>
-                <code>10m</code><span class="desc">wait 10 minutes</span>
+                ><span class="desc"
+                  >count down 10 seconds (s is the default)</span
+                >
+                <code>10s</code><span class="desc">count down 10 seconds</span>
+                <code>10m</code><span class="desc">count down 10 minutes</span>
                 <code>a + b</code><span class="desc">do a, then b</span>
                 <code>p</code
                 ><span class="desc">pause until you tap Proceed</span>
@@ -92,6 +94,10 @@ export class TerHeader extends LitElement {
                 <code>(…)</code
                 ><span class="desc"
                   >group — must follow <code>+</code> or <code>*</code></span
+                >
+                <code>term?</code
+                ><span class="desc"
+                  >skip this term on the last round of its repeat</span
                 >
               </div>
             </div>
@@ -101,21 +107,36 @@ export class TerHeader extends LitElement {
                 <code>10+5+10</code
                 ><span class="desc">10s, then 5s, then 10s</span>
                 <code>4*(3+1+p)</code
-                ><span class="desc">4 rounds of: 3s, 1s, wait for tap</span>
+                ><span class="desc"
+                  >4 rounds of: 3s, 1s, wait for tap</span
+                >
                 <code>1m+(5+11+p)</code
-                ><span class="desc">1 min, then 5s, 11s, wait for tap</span>
+                ><span class="desc"
+                  >1 min, then 5s, 11s, wait for tap</span
+                >
+                <code>4*(3+1+p?)</code
+                ><span class="desc"
+                  >4 rounds of 3s+1s, but no proceed-tap after the last
+                  round</span
+                >
               </div>
             </div>
             <div>
               <h2>While running</h2>
               <div class="rows">
                 <code>Pause</code
-                ><span class="desc">freeze the countdown; Resume continues</span>
+                ><span class="desc">freeze the countdown; Resume continues</span
+                >
                 <code>Proceed</code
                 ><span class="desc">advance past a <code>p</code> signal</span>
                 <code>Cancel</code><span class="desc">stop and reset</span>
+                <code>🔊/🔇</code
+                ><span class="desc">toggle sound on/off</span>
                 <code>♪</code
-                ><span class="desc">beeps in the last 2s of each wait</span>
+                ><span class="desc"
+                  >beeps at 10s left, in the last 2s of each countdown, and a
+                  soft tone on completion</span
+                >
               </div>
             </div>
           </div>

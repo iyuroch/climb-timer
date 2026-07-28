@@ -7,10 +7,10 @@ import {
   Status,
   Ticker,
   type ASTNode,
-  type WaitNode,
+  type CountdownNode,
   remainingDuration,
   staticDuration,
-  formatWait,
+  formatCountdown,
 } from "../lib/engine.ts";
 
 import "./ter-list.ts";
@@ -18,9 +18,9 @@ import type { SavedExpr, Token, ExprState } from "./ter-list.ts";
 
 const LS_KEY = "ter-expressions";
 
-// Max width (in ch) a running wait will ever need: "<seconds>.0".
+// Max width (in ch) a running countdown will ever need: "<seconds>.0".
 // The integer part only shrinks as it counts down, so the start value is widest.
-function waitWidthCh(seconds: number): number {
+function countdownWidthCh(seconds: number): number {
   return String(seconds).length + 2;
 }
 
@@ -95,6 +95,29 @@ export class TerApp extends LitElement {
       color: var(--muted);
       padding: 8px;
     }
+    .top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 4px 8px;
+    }
+    .top-bar .hint {
+      padding: 0;
+    }
+    .mute-toggle {
+      flex: none;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border, #1f2942);
+      background: var(--panel, #131a2b);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
 
     /* ===== Full-screen expanded stage ===== */
     .stage {
@@ -123,6 +146,25 @@ export class TerApp extends LitElement {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    .stage-total {
+      flex: none;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+    .mute-btn {
+      flex: none;
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      border: 1px solid var(--border, #1f2942);
+      background: var(--panel, #131a2b);
+      color: var(--text, #e7ecff);
+      font-size: 18px;
+      cursor: pointer;
     }
     .stage-close {
       flex: none;
@@ -153,6 +195,7 @@ export class TerApp extends LitElement {
       gap: 10px;
     }
     .snode {
+      position: relative;
       border: 1px solid var(--border, #1f2942);
       background: var(--panel, #131a2b);
       border-radius: 14px;
@@ -165,10 +208,27 @@ export class TerApp extends LitElement {
       border-color: #3ddc84;
       box-shadow: 0 0 18px rgba(61, 220, 132, 0.15);
     }
+    .snode.skip-last {
+      border-style: dashed;
+    }
+    .skip-badge {
+      position: absolute;
+      top: -9px;
+      right: 12px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+      color: #ffd27a;
+      background: #2a2412;
+      border: 1px solid #6b5a2a;
+      border-radius: 999px;
+      padding: 2px 8px;
+    }
     .snode.done {
       opacity: 0.4;
     }
-    .swait {
+    .scountdown {
       display: flex;
       align-items: center;
       justify-content: center;
@@ -179,7 +239,7 @@ export class TerApp extends LitElement {
         ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       color: var(--text, #e7ecff);
     }
-    .snode.running .swait {
+    .snode.running .scountdown {
       color: #6bffac;
     }
     .ssig {
@@ -305,6 +365,9 @@ export class TerApp extends LitElement {
   private ast: ASTNode | null = null;
   private abortCtrl: AbortController | null = null;
   private evaluator: Evaluator | null = null;
+  // Bumped on every run() so a delayed teardown from a finished/aborted run
+  // can detect a newer run has since started and skip tearing down its audio.
+  private runGeneration = 0;
   private paused = false;
   private awaitingSignal = false;
   private expandedId: string | null = null;
@@ -336,6 +399,7 @@ export class TerApp extends LitElement {
   private handleResume = () => this.resume();
   private handleExpand = (id: string) => this.expand(id);
   private handleCollapse = () => this.collapse();
+  private handleToggleMute = () => this.toggleMute();
 
   // Re-acquire the wake lock when returning to the tab (it auto-releases when hidden).
   private onVisibility = () => {
@@ -493,8 +557,8 @@ export class TerApp extends LitElement {
       toks.push({ kind: "sig", key, text, flash: false });
     const rec = (n: ASTNode) => {
       if (!n) return;
-      if (n.type === "wait") {
-        addNum("w-" + n.id, String(n.seconds), waitWidthCh(n.seconds));
+      if (n.type === "countdown") {
+        addNum("w-" + n.id, String(n.seconds), countdownWidthCh(n.seconds));
       } else if (n.type === "signal") {
         addSig("s-" + n.id, "p");
       } else if (n.type === "sequence") {
@@ -509,6 +573,7 @@ export class TerApp extends LitElement {
         rec(n.body);
         addTxt("rp-" + n.id, ")");
       }
+      if (n.skipLast) addTxt("opt-" + n.id, "?");
     };
     rec(ast);
     return toks;
@@ -613,15 +678,16 @@ export class TerApp extends LitElement {
     this.refreshState(id);
 
     // rAF-driven countdown display: synced to the browser's repaint so the
-    // per-wait numbers animate smoothly via formatWait's interpolation.
+    // per-countdown numbers animate smoothly via formatCountdown's interpolation.
     this.ticker.start();
 
+    const gen = ++this.runGeneration;
     this.abortCtrl = new AbortController();
     const ev = new Evaluator(this.ast, this.signalMgr);
     this.evaluator = ev;
     const onUpdate = (changed: ASTNode) => {
-      if ((changed as any).type === "wait") {
-        const w = changed as WaitNode;
+      if ((changed as any).type === "countdown") {
+        const w = changed as CountdownNode;
         w._lastUpdate = performance.now();
         w._lastElapsed = w.elapsed;
         this.beepIfNeeded(w);
@@ -640,7 +706,13 @@ export class TerApp extends LitElement {
       .finally(() => {
         this.ticker.stop();
         this.releaseWakeLock();
-        this.stopKeepAlive();
+        // Delay tearing down the keep-alive audio path: the final completion
+        // beep is scheduled just before this settles, and it's routed through
+        // the same MediaStream → <audio> element that stopKeepAlive() pauses,
+        // so pausing immediately cuts the beep off before it plays.
+        setTimeout(() => {
+          if (this.runGeneration === gen) this.stopKeepAlive();
+        }, 500);
         this.evaluator = null;
         this.paused = false;
         this.awaitingSignal = false;
@@ -691,11 +763,11 @@ export class TerApp extends LitElement {
     }
   }
 
-  private currentWait(): WaitNode | null {
-    let found: WaitNode | null = null;
+  private currentCountdown(): CountdownNode | null {
+    let found: CountdownNode | null = null;
     const visit = (n: ASTNode) => {
       if (found || !n) return;
-      if (n.type === "wait") {
+      if (n.type === "countdown") {
         if (n.status === Status.Running) found = n;
       } else if (n.type === "sequence") n.children.forEach(visit);
       else if (n.type === "repeat") visit(n.body);
@@ -706,8 +778,8 @@ export class TerApp extends LitElement {
 
   private pause() {
     if (!this.evaluator || this.paused) return;
-    // Freeze the active wait's display at its current fractional value.
-    const w = this.currentWait();
+    // Freeze the active countdown's display at its current fractional value.
+    const w = this.currentCountdown();
     if (w) {
       const base = w._lastElapsed ?? w.elapsed;
       const dt = Math.max(0, (performance.now() - (w._lastUpdate ?? 0)) / 1000);
@@ -722,7 +794,7 @@ export class TerApp extends LitElement {
 
   private resume() {
     if (!this.evaluator || !this.paused) return;
-    const w = this.currentWait();
+    const w = this.currentCountdown();
     if (w) {
       // Continue interpolating from the frozen fractional value.
       w._lastUpdate = performance.now();
@@ -740,19 +812,24 @@ export class TerApp extends LitElement {
     this.updateMediaSession();
   }
 
+  private toggleMute() {
+    this.beeper.muted = !this.beeper.muted;
+    this.requestUpdate();
+  }
+
   private seedTiming(n: ASTNode) {
     const visit = (node: ASTNode) => {
-      if (node.type === "wait") {
-        (node as WaitNode)._lastElapsed = node.elapsed;
-        (node as WaitNode)._lastUpdate = performance.now();
-        (node as WaitNode)._beepElapsedMark = node.elapsed;
+      if (node.type === "countdown") {
+        (node as CountdownNode)._lastElapsed = node.elapsed;
+        (node as CountdownNode)._lastUpdate = performance.now();
+        (node as CountdownNode)._beepElapsedMark = node.elapsed;
       } else if (node.type === "sequence") node.children.forEach(visit);
       else if (node.type === "repeat") visit(node.body);
     };
     visit(n);
   }
 
-  private waitRemaining(n: WaitNode) {
+  private countdownRemaining(n: CountdownNode) {
     let r = n.seconds - n.elapsed;
     if (n.status === Status.Done) r = 0;
     return r < 0 ? 0 : r;
@@ -769,9 +846,9 @@ export class TerApp extends LitElement {
       toks.push({ kind: "sig", key, text, flash: false });
     const rec = (n: ASTNode) => {
       if (!n) return;
-      if (n.type === "wait") {
+      if (n.type === "countdown") {
         const key = "w-" + n.id;
-        addNum(key, formatWait(n as WaitNode), waitWidthCh(n.seconds));
+        addNum(key, formatCountdown(n as CountdownNode), countdownWidthCh(n.seconds));
         if (changed && changed === n) flash.add(key);
       } else if (n.type === "signal") {
         const key = "s-" + n.id;
@@ -794,6 +871,7 @@ export class TerApp extends LitElement {
         addTxt("rp-" + n.id, ")");
         if (changed && changed === n) flash.add(key);
       }
+      if (n.skipLast) addTxt("opt-" + n.id, "?");
     };
     if (this.ast) rec(this.ast);
     toks.forEach((t) => {
@@ -828,21 +906,36 @@ export class TerApp extends LitElement {
     }
   }
 
-  private beepIfNeeded(n: WaitNode) {
+  private beepIfNeeded(n: CountdownNode) {
     if (!this.beeper || !this.beeper.ctx) return;
     if (n._beepElapsedMark === undefined) n._beepElapsedMark = n.elapsed;
     if (n.elapsed === n._beepElapsedMark) return;
     n._beepElapsedMark = n.elapsed;
-    const rem = this.waitRemaining(n);
-    if (rem === 2 || rem === 1)
-      this.beeper.beep({ freq: 880, duration: 0.09, gain: 0.15, type: "sine" });
-    else if (rem === 0)
+    const rem = this.countdownRemaining(n);
+    if (rem === 10) {
+      // Distinct low double-beep heads-up, separate from the 2s/1s/0s beeps.
+      this.beeper.beep({ freq: 520, duration: 0.1, gain: 0.2, type: "sine" });
+      setTimeout(
+        () =>
+          this.beeper.beep({
+            freq: 520,
+            duration: 0.1,
+            gain: 0.2,
+            type: "sine",
+          }),
+        140,
+      );
+    } else if (rem === 2 || rem === 1) {
+      this.beeper.beep({ freq: 880, duration: 0.09, gain: 0.22, type: "sine" });
+    } else if (rem === 0) {
+      // Softer completion tone — a single sine note instead of the harsher square wave.
       this.beeper.beep({
-        freq: 1320,
-        duration: 0.2,
-        gain: 0.25,
-        type: "square",
+        freq: 660,
+        duration: 0.28,
+        gain: 0.2,
+        type: "sine",
       });
+    }
   }
 
   private statusClass(n: ASTNode): string {
@@ -851,20 +944,36 @@ export class TerApp extends LitElement {
     return "pending";
   }
 
+  private renderSkipBadge(n: ASTNode): unknown {
+    return n.skipLast
+      ? html`<div class="skip-badge" title="Skipped on the last round">
+          skips last round
+        </div>`
+      : "";
+  }
+
   // Recursively render the AST as nested vertical boxes for the full-screen stage.
   private renderStageNode(n: ASTNode): unknown {
     if (!n) return "";
-    if (n.type === "wait") {
-      return html`<div class="snode swait-node ${this.statusClass(n)}">
-        <div class="swait">${formatWait(n as WaitNode)}</div>
+    if (n.type === "countdown") {
+      return html`<div
+        class="snode scountdown-node ${this.statusClass(n)} ${n.skipLast
+          ? "skip-last"
+          : ""}"
+      >
+        ${this.renderSkipBadge(n)}
+        <div class="scountdown">${formatCountdown(n as CountdownNode)}</div>
       </div>`;
     }
     if (n.type === "signal") {
       const running = n.status === Status.Running;
       return html`<div
-        class="snode ssig-node ${this.statusClass(n)}"
+        class="snode ssig-node ${this.statusClass(n)} ${n.skipLast
+          ? "skip-last"
+          : ""}"
         @click=${running ? this.handleSignal : null}
       >
+        ${this.renderSkipBadge(n)}
         <div class="ssig">
           ${running
             ? html`👉 Tap to proceed
@@ -880,12 +989,21 @@ export class TerApp extends LitElement {
     }
     // repeat (loop)
     const round = Math.min(n.iteration + 1, n.times);
-    return html`<div class="snode srepeat ${this.statusClass(n)}">
+    const roundLabel =
+      n.status === Status.Running
+        ? html`round ${round}/${n.times}`
+        : n.status === Status.Done
+          ? html`round ${n.times}/${n.times}`
+          : html`${n.times} round${n.times !== 1 ? "s" : ""}`;
+    return html`<div
+      class="snode srepeat ${this.statusClass(n)} ${n.skipLast
+        ? "skip-last"
+        : ""}"
+    >
+      ${this.renderSkipBadge(n)}
       <div class="srepeat-head">
         <span class="rep-icon">↻</span>
-        ${n.status === Status.Running
-          ? html`<span class="rep-round">round ${round}/${n.times}</span>`
-          : ""}
+        <span class="rep-round">${roundLabel}</span>
       </div>
       <div class="srepeat-body">${this.renderStageNode(n.body)}</div>
     </div>`;
@@ -898,10 +1016,22 @@ export class TerApp extends LitElement {
     const isRunning = this.expandedId === this.runningId;
     const ast = isRunning ? this.ast : this.safeParse(expr.expr);
 
+    const totalDur = ast ? staticDuration(ast) : 0;
+
     return html`
       <div class="stage">
         <div class="stage-head">
           <div class="stage-title">${expr.name}</div>
+          ${ast
+            ? html`<div class="stage-total">${totalDur}s total</div>`
+            : ""}
+          <button
+            class="mute-btn"
+            title=${this.beeper.muted ? "Unmute" : "Mute"}
+            @click=${this.handleToggleMute}
+          >
+            ${this.beeper.muted ? "🔇" : "🔊"}
+          </button>
           <button
             class="stage-close"
             title="Collapse"
@@ -948,7 +1078,16 @@ export class TerApp extends LitElement {
   render() {
     return html`
       ${this.renderStage()}
-      <span class="hint">Tap any button once to allow audio.</span>
+      <div class="top-bar">
+        <span class="hint">Tap any button once to allow audio.</span>
+        <button
+          class="mute-toggle"
+          title=${this.beeper.muted ? "Unmute" : "Mute"}
+          @click=${this.handleToggleMute}
+        >
+          ${this.beeper.muted ? "🔇 Muted" : "🔊 Sound on"}
+        </button>
+      </div>
       <ter-list
         .items=${this.exprs}
         .runningId=${this.runningId}

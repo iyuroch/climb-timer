@@ -12,11 +12,12 @@ export enum TT {
   LP,
   RP,
   SIG,
+  OPT,
 }
 
-export type WaitNode = {
+export type CountdownNode = {
   id: number;
-  type: "wait";
+  type: "countdown";
   status: Status;
   seconds: number;
   elapsed: number;
@@ -24,14 +25,22 @@ export type WaitNode = {
   _lastElapsed: number;
   _beepElapsedMark: number;
   _paused?: boolean;
+  /** Trailing '?' — skip this node on the last iteration of its nearest enclosing repeat. */
+  skipLast?: boolean;
 };
-export type SignalNode = { id: number; type: "signal"; status: Status };
+export type SignalNode = {
+  id: number;
+  type: "signal";
+  status: Status;
+  skipLast?: boolean;
+};
 export type SequenceNode = {
   id: number;
   type: "sequence";
   status: Status;
   currentIndex: number;
   children: ASTNode[];
+  skipLast?: boolean;
 };
 export type RepeatNode = {
   id: number;
@@ -40,8 +49,13 @@ export type RepeatNode = {
   times: number;
   iteration: number;
   body: ASTNode;
+  skipLast?: boolean;
 };
-export type ASTNode = WaitNode | SignalNode | SequenceNode | RepeatNode;
+export type ASTNode =
+  | CountdownNode
+  | SignalNode
+  | SequenceNode
+  | RepeatNode;
 
 // ===== Signal manager =====
 export class SignalManager {
@@ -171,6 +185,7 @@ class Lexer {
     if (c === "(") return { t: TT.LP, lit: "(" };
     if (c === ")") return { t: TT.RP, lit: ")" };
     if (c === "p" || c === "P") return { t: TT.SIG, lit: "p" };
+    if (c === "?") return { t: TT.OPT, lit: "?" };
     if (/\d/.test(c)) {
       const lit = this.number(c);
       const u = this.peek();
@@ -239,7 +254,18 @@ export class Parser {
     this.adv(); // consume ')'
     return inner;
   }
+  // Parses one atomic unit, then consumes an optional trailing '?' which
+  // marks the node to be skipped on the last iteration of its nearest
+  // enclosing repeat (has no effect outside any repeat).
   private term(): ASTNode {
+    const node = this.termCore();
+    if (this.cur.t === TT.OPT) {
+      this.adv();
+      (node as any).skipLast = true;
+    }
+    return node;
+  }
+  private termCore(): ASTNode {
     if (this.cur.t === TT.NUM) {
       const num = parseInt(this.cur.lit, 10);
       const unit: string | undefined = this.cur.unit;
@@ -265,7 +291,7 @@ export class Parser {
       }
       return {
         id: this.id(),
-        type: "wait",
+        type: "countdown",
         status: Status.Pending,
         seconds: unit === "m" ? num * 60 : num,
         elapsed: 0,
@@ -314,7 +340,7 @@ export class Evaluator {
   }
   reset(node: ASTNode = this.ast) {
     if (!node) return;
-    if (node.type === "wait") {
+    if (node.type === "countdown") {
       node.status = Status.Pending;
       node.elapsed = 0;
     } else if (node.type === "sequence") {
@@ -374,9 +400,28 @@ export class Evaluator {
           id = setTimeout(done, remaining);
         }
       });
-    const exec = async (node: ASTNode): Promise<void> => {
+    // Recursively mark a node (and its descendants) Done without running it —
+    // used when a '?'-marked node is skipped on the last repeat iteration.
+    const markSkipped = (node: ASTNode) => {
+      node.status = Status.Done;
+      if (node.type === "countdown") {
+        node.elapsed = node.seconds;
+      } else if (node.type === "sequence") {
+        node.currentIndex = node.children.length;
+        node.children.forEach(markSkipped);
+      } else if (node.type === "repeat") {
+        node.iteration = node.times;
+        markSkipped(node.body);
+      }
+      onUpdate(node);
+    };
+    const exec = async (node: ASTNode, lastIter: boolean): Promise<void> => {
       if (signal?.aborted) throw new Error("aborted");
-      if (node.type === "wait") {
+      if (node.skipLast && lastIter) {
+        markSkipped(node);
+        return;
+      }
+      if (node.type === "countdown") {
         node.status = Status.Running;
         onUpdate(node);
         while (node.elapsed < node.seconds) {
@@ -400,7 +445,7 @@ export class Evaluator {
         for (let i = node.currentIndex; i < node.children.length; i++) {
           node.currentIndex = i;
           onUpdate(node);
-          await exec(node.children[i]);
+          await exec(node.children[i], lastIter);
           if (signal?.aborted) throw new Error("aborted");
         }
         node.status = Status.Done;
@@ -412,14 +457,14 @@ export class Evaluator {
           node.iteration = i;
           onUpdate(node);
           this.reset(node.body);
-          await exec(node.body);
+          await exec(node.body, i === node.times - 1);
           if (signal?.aborted) throw new Error("aborted");
         }
         node.status = Status.Done;
         onUpdate(node);
       }
     };
-    await exec(this.ast);
+    await exec(this.ast, false);
   }
 }
 
@@ -457,18 +502,36 @@ export class Ticker {
 }
 
 // ===== Helpers used by renderer/app =====
-export function staticDuration(node: ASTNode | undefined): number {
+// isLastIter: whether `node` sits in the last iteration of its nearest
+// enclosing repeat — a '?'-marked node contributes 0 duration in that case.
+export function staticDuration(
+  node: ASTNode | undefined,
+  isLastIter = false,
+): number {
   if (!node) return 0;
-  if (node.type === "wait") return node.seconds;
+  if (node.skipLast && isLastIter) return 0;
+  if (node.type === "countdown") return node.seconds;
   if (node.type === "signal") return 0;
   if (node.type === "sequence")
-    return node.children.reduce((a, c) => a + staticDuration(c), 0);
-  if (node.type === "repeat") return node.times * staticDuration(node.body);
+    return node.children.reduce(
+      (a, c) => a + staticDuration(c, isLastIter),
+      0,
+    );
+  if (node.type === "repeat") {
+    let total = 0;
+    for (let i = 0; i < node.times; i++)
+      total += staticDuration(node.body, i === node.times - 1);
+    return total;
+  }
   return 0;
 }
-export function remainingDuration(node: ASTNode | undefined): number {
+export function remainingDuration(
+  node: ASTNode | undefined,
+  isLastIter = false,
+): number {
   if (!node) return 0;
-  if (node.type === "wait") {
+  if (node.skipLast && isLastIter) return 0;
+  if (node.type === "countdown") {
     let rem = node.seconds - node.elapsed;
     if (node.status === Status.Done) rem = 0;
     return Math.max(0, rem);
@@ -480,21 +543,23 @@ export function remainingDuration(node: ASTNode | undefined): number {
     for (let i = 0; i < node.children.length; i++) {
       const ch = node.children[i];
       if (i < node.currentIndex) continue;
-      if (i === node.currentIndex) total += remainingDuration(ch);
-      else total += staticDuration(ch);
+      if (i === node.currentIndex) total += remainingDuration(ch, isLastIter);
+      else total += staticDuration(ch, isLastIter);
     }
     return total;
   }
   if (node.type === "repeat") {
     if (node.status === Status.Done) return 0;
-    const bodyDur = staticDuration(node.body);
-    const bodyRem = remainingDuration(node.body);
-    const remainingIters = Math.max(node.times - node.iteration - 1, 0);
-    return bodyRem + remainingIters * bodyDur;
+    const curIsLast = node.iteration === node.times - 1;
+    const bodyRem = remainingDuration(node.body, curIsLast);
+    let futureTotal = 0;
+    for (let i = node.iteration + 1; i < node.times; i++)
+      futureTotal += staticDuration(node.body, i === node.times - 1);
+    return bodyRem + futureTotal;
   }
   return 0;
 }
-export function formatWait(n: WaitNode) {
+export function formatCountdown(n: CountdownNode) {
   if (n.status === Status.Running) {
     const base = n._lastElapsed ?? n.elapsed;
     // While paused, _lastElapsed holds the frozen fractional elapsed.
@@ -506,6 +571,6 @@ export function formatWait(n: WaitNode) {
   }
   const remaining = Math.max(0, n.seconds - n.elapsed);
   // Always keep one decimal so the token width stays fixed (no reflow
-  // when a wait reaches 0 or hasn't started yet).
+  // when a countdown reaches 0 or hasn't started yet).
   return remaining.toFixed(1);
 }
