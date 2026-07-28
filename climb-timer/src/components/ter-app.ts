@@ -136,7 +136,19 @@ export class TerApp extends LitElement {
       align-items: center;
       justify-content: space-between;
       gap: 12px;
+      margin-bottom: 8px;
+    }
+    .stage-progress {
+      height: 4px;
+      border-radius: 999px;
+      background: var(--border, #1f2942);
+      overflow: hidden;
       margin-bottom: 14px;
+    }
+    .stage-progress-fill {
+      height: 100%;
+      background: #3ddc84;
+      transition: width 0.3s linear;
     }
     .stage-title {
       font-size: 18px;
@@ -1017,13 +1029,23 @@ export class TerApp extends LitElement {
     const ast = isRunning ? this.ast : this.safeParse(expr.expr);
 
     const totalDur = ast ? staticDuration(ast) : 0;
+    const remainingDur = ast ? remainingDuration(ast) : 0;
+    const progressPct =
+      totalDur > 0
+        ? Math.min(
+            100,
+            Math.max(0, ((totalDur - remainingDur) / totalDur) * 100),
+          )
+        : 0;
 
     return html`
       <div class="stage">
         <div class="stage-head">
           <div class="stage-title">${expr.name}</div>
           ${ast
-            ? html`<div class="stage-total">${totalDur}s total</div>`
+            ? html`<div class="stage-total">
+                ${remainingDur}s left / ${totalDur}s total
+              </div>`
             : ""}
           <button
             class="mute-btn"
@@ -1040,6 +1062,14 @@ export class TerApp extends LitElement {
             ×
           </button>
         </div>
+        ${ast
+          ? html`<div class="stage-progress">
+              <div
+                class="stage-progress-fill"
+                style="width:${progressPct}%"
+              ></div>
+            </div>`
+          : ""}
         <div class="stage-tree">
           ${ast
             ? this.renderStageNode(ast)
