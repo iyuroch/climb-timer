@@ -86,8 +86,13 @@ function saveExprs(items: SavedExpr[]) {
 export class TerApp extends LitElement {
   static styles = css`
     :host {
-      display: block;
+      display: flex;
+      flex-direction: column;
       height: 100%;
+    }
+    ter-list {
+      flex: 1;
+      min-height: 0;
     }
     .hint {
       text-align: center;
@@ -96,6 +101,7 @@ export class TerApp extends LitElement {
       padding: 8px;
     }
     .top-bar {
+      flex: none;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -664,8 +670,13 @@ export class TerApp extends LitElement {
       this.rebuildTokens();
       this.updateRemaining();
     } catch (e: any) {
+      // Clear the stale AST so run() correctly bails out instead of
+      // executing a previous expression's tree under this one's identity.
+      this.ast = null;
       this.errorMsg = "Parse error: " + e.message;
       this.totalDur = 0;
+      this.tokens = [];
+      this.remaining = "--";
     }
   }
 

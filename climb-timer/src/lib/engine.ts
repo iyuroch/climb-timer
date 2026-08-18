@@ -150,7 +150,11 @@ export class Beeper {
     g.gain.setValueAtTime(0, ctx.currentTime);
     g.gain.linearRampToValueAtTime(gain, ctx.currentTime + 0.005);
     g.gain.exponentialRampToValueAtTime(1e-4, ctx.currentTime + duration);
-    osc.connect(g).connect(this.dest);
+    osc.connect(g);
+    // Always connect to the normal output so beeps are audible even if the
+    // MediaStream → <audio> lock-screen routing never starts playing.
+    g.connect(ctx.destination);
+    if (this.streamDest) g.connect(this.streamDest);
     osc.start();
     osc.stop(ctx.currentTime + duration + 0.01);
   }
